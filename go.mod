@@ -1,4 +1,4 @@
-module robot-gitlab-access
+module github.com/opensourceways/robot-gitlab-access
 
 go 1.16
 
