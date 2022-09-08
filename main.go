@@ -47,6 +47,7 @@ func main() {
 		logrus.WithError(err).Fatal("Invalid options")
 	}
 
+	// load config
 	configAgent := config.NewConfigAgent(func() config.Config {
 		return new(configuration)
 	})
@@ -54,21 +55,19 @@ func main() {
 		logrus.WithError(err).Fatal("Error starting config agent.")
 	}
 
+	defer configAgent.Stop()
+
+	// agent
 	agent := demuxConfigAgent{agent: &configAgent, t: utils.NewTimer()}
 	agent.start()
+	defer agent.stop()
 
+	// start server
 	d := newDispatcher(&agent, o.userAgent)
 
 	defer interrupts.WaitForGracefulShutdown()
 
 	interrupts.OnInterrupt(func() {
-		// agent depends on configAgent, so stop agent first.
-		agent.stop()
-		logrus.Info("demux stopped")
-
-		configAgent.Stop()
-		logrus.Info("config agent stopped")
-
 		d.wait()
 	})
 
