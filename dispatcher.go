@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/opensourceways/community-robot-lib/gitlabclient"
-	"github.com/xanzy/go-gitlab"
 	"io/ioutil"
 	"net/http"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/opensourceways/community-robot-lib/gitlabclient"
+	"github.com/opensourceways/community-robot-lib/utils"
 	"github.com/sirupsen/logrus"
+	"github.com/xanzy/go-gitlab"
 )
 
 const (
@@ -31,13 +31,21 @@ type noteEvent struct {
 type dispatcher struct {
 	agent *demuxConfigAgent
 
-	hmac func() string
+	userAgent string
 
-	// ec is an http client used for dispatching events
-	// to external plugin services.
-	ec http.Client
+	hc utils.HttpClient
+
 	// Tracks running handlers for graceful shutdown
 	wg sync.WaitGroup
+}
+
+func newDispatcher(agent *demuxConfigAgent, userAgent string) *dispatcher {
+	return &dispatcher{
+		agent:     agent,
+		userAgent: userAgent,
+		hc:        utils.HttpClient{MaxRetries: 3},
+	}
+
 }
 
 func (d *dispatcher) wait() {
@@ -46,10 +54,11 @@ func (d *dispatcher) wait() {
 
 // ServeHTTP validates an incoming webhook and puts it into the event channel.
 func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	eventType, eventGUID, _, payload, ok, _ := gitlabclient.ValidateWebhook(w, r, d.hmac)
+	eventType, eventGUID, payload, ok := d.parseRequest(w, r)
 	if !ok {
 		return
 	}
+
 	fmt.Fprint(w, "Event received. Have a nice day.")
 
 	l := logrus.WithFields(
@@ -60,8 +69,47 @@ func (d *dispatcher) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if err := d.dispatch(eventType, payload, r.Header, l); err != nil {
-		l.WithError(err).Error()
+		l.Error(err)
 	}
+}
+
+func (d *dispatcher) parseRequest(w http.ResponseWriter, r *http.Request) (
+	eventType string,
+	uuid string,
+	payload []byte,
+	ok bool,
+) {
+	defer r.Body.Close()
+
+	resp := func(code int, msg string) {
+		http.Error(w, msg, code)
+	}
+
+	if r.Header.Get("User-Agent") != d.userAgent {
+		resp(http.StatusBadRequest, "400 Bad Request: unknown User-Agent Header")
+		return
+	}
+
+	if eventType = r.Header.Get("X-Gitlab-Event"); eventType == "" {
+		resp(http.StatusBadRequest, "400 Bad Request: Missing X-Gitlab-Event Header")
+		return
+	}
+
+	if uuid = r.Header.Get("X-Gitlab-Event-UUID"); uuid == "" {
+		resp(http.StatusBadRequest, "400 Bad Request: Missing X-Gitlab-Event-UUID Header")
+		return
+	}
+
+	v, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		resp(http.StatusInternalServerError, "500 Internal Server Error: Failed to read request body")
+		return
+	}
+
+	payload = v
+	ok = true
+
+	return
 }
 
 func (d *dispatcher) dispatch(eventType string, payload []byte, h http.Header, l *logrus.Entry) error {
@@ -162,65 +210,33 @@ func (d *dispatcher) doDispatch(endpoints []string, payload []byte, h http.Heade
 		return req, nil
 	}
 
-	reqs := make([]*http.Request, 0, len(endpoints))
+	reqs := make(map[string]*http.Request, len(endpoints))
 
 	for _, endpoint := range endpoints {
 		if req, err := newReq(endpoint); err == nil {
-			reqs = append(reqs, req)
+			reqs[endpoint] = req
 		} else {
-			l.WithError(err).WithField("endpoint", endpoint).Error("Error generating http request.")
+			l.Errorf(
+				"Error generating http request for endpoint:%s, err:%s",
+				endpoint, err.Error(),
+			)
 		}
 	}
 
-	for _, req := range reqs {
+	for endpoint, req := range reqs {
 		d.wg.Add(1)
 
 		// concurrent action is sending request not generating it.
 		// so, generates requests first.
-		go func(req *http.Request) {
+		go func(e string, req *http.Request) {
 			defer d.wg.Done()
 
-			if err := d.forwardTo(req); err != nil {
-				l.WithError(err).WithField("endpoint", req.URL.String()).Error("Error forwarding event.")
+			if err := d.hc.ForwardTo(req, nil); err != nil {
+				l.Errorf(
+					"Error forwarding event to endpoint:%s, err:%s",
+					e, err.Error(),
+				)
 			}
-		}(req)
+		}(endpoint, req)
 	}
-}
-
-func (d *dispatcher) forwardTo(req *http.Request) error {
-	resp, err := d.do(req)
-	if err != nil || resp == nil {
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	rb, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("response has status %q and body %q", resp.Status, string(rb))
-	}
-	return nil
-}
-
-func (d *dispatcher) do(req *http.Request) (resp *http.Response, err error) {
-	if resp, err = d.ec.Do(req); err == nil {
-		return
-	}
-
-	maxRetries := 4
-	backoff := 100 * time.Millisecond
-
-	for retries := 0; retries < maxRetries; retries++ {
-		time.Sleep(backoff)
-		backoff *= 2
-
-		if resp, err = d.ec.Do(req); err == nil {
-			break
-		}
-	}
-	return
 }
