@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -14,7 +13,7 @@ type demuxConfigAgent struct {
 	agent *config.ConfigAgent
 
 	mut     sync.RWMutex
-	demux   map[string]eventsDemux
+	demux   eventsDemux
 	version string
 	t       utils.Timer
 }
@@ -47,29 +46,14 @@ func (ca *demuxConfigAgent) load() {
 	ca.mut.Unlock()
 }
 
-func (ca *demuxConfigAgent) getEndpoints(org, repo, event string) []string {
+func (ca *demuxConfigAgent) getEndpoints(event string) (v []string) {
 	ca.mut.RLock()
-	v := getEventsDemux(org, repo, ca.demux)[event]
+	if ca.demux != nil {
+		v = ca.demux[event]
+	}
 	ca.mut.RUnlock()
 
-	return v
-}
-
-func getEventsDemux(org, repo string, demux map[string]eventsDemux) eventsDemux {
-	if demux == nil {
-		return eventsDemux{}
-	}
-
-	fullname := fmt.Sprintf("%s/%s", org, repo)
-	if items, ok := demux[fullname]; ok {
-		return items
-	}
-
-	if items, ok := demux[org]; ok {
-		return items
-	}
-
-	return eventsDemux{}
+	return
 }
 
 func (ca *demuxConfigAgent) start() {

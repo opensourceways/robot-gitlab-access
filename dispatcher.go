@@ -189,7 +189,7 @@ func (d *dispatcher) dispatch(eventType string, payload []byte, h http.Header, l
 		"repo": repo,
 	})
 
-	endpoints := d.agent.getEndpoints(org, repo, eventType)
+	endpoints := d.agent.getEndpoints(eventType)
 	l.WithField("endpoints", strings.Join(endpoints, ", ")).Info("start dispatching event.")
 
 	d.doDispatch(endpoints, payload, h, l)

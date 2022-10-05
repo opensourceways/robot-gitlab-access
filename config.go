@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 )
@@ -18,14 +17,11 @@ func (c *configuration) Validate() error {
 func (c *configuration) SetDefault() {}
 
 type accessConfig struct {
-	// Plugins is a map of repositories (eg "k/k") to lists of plugin names.
-	RepoPlugins map[string][]string `json:"repo_plugins,omitempty"`
-
 	// Plugins is a list available plugins.
 	Plugins []pluginConfig `json:"plugins,omitempty"`
 }
 
-func (a accessConfig) validate() error {
+func (a *accessConfig) validate() error {
 	for i := range a.Plugins {
 		if err := a.Plugins[i].validate(); err != nil {
 			return err
@@ -39,13 +35,8 @@ func (a accessConfig) validate() error {
 
 	total := sets.NewString(ps...)
 
-	for k, item := range a.RepoPlugins {
-		if v := sets.NewString(item...).Difference(total); v.Len() != 0 {
-			return fmt.Errorf(
-				"%s: unknown plugins(%s) are set", k,
-				strings.Join(v.UnsortedList(), ", "),
-			)
-		}
+	if n := len(ps) - total.Len(); n != 0 {
+		return fmt.Errorf("%d duplicate plugin names exist", n)
 	}
 
 	return nil
@@ -65,43 +56,14 @@ func updateDemux(p *pluginConfig, d eventsDemux) {
 	}
 }
 
-func orgOfRepo(repo string) string {
-	spliter := "/"
-	if strings.Contains(repo, spliter) {
-		return strings.Split(repo, spliter)[0]
-	}
-	return ""
-}
+func (a *accessConfig) getDemux() eventsDemux {
+	v := make(eventsDemux)
 
-func (a accessConfig) getDemux() map[string]eventsDemux {
-	plugins := make(map[string]int)
 	for i := range a.Plugins {
-		plugins[a.Plugins[i].Name] = i
+		updateDemux(&a.Plugins[i], v)
 	}
 
-	r := make(map[string]eventsDemux)
-	rp := a.RepoPlugins
-
-	for k, ps := range rp {
-		events, ok := r[k]
-		if !ok {
-			events = make(eventsDemux)
-			r[k] = events
-		}
-
-		// inherit the config of org if k is a repo.
-		if org := orgOfRepo(k); org != "" {
-			ps = append(ps, rp[org]...)
-		}
-
-		for _, p := range ps {
-			if i, ok := plugins[p]; ok {
-				updateDemux(&a.Plugins[i], events)
-			}
-		}
-	}
-
-	return r
+	return v
 }
 
 type pluginConfig struct {
@@ -116,7 +78,7 @@ type pluginConfig struct {
 	Events []string `json:"events,omitempty"`
 }
 
-func (p pluginConfig) validate() error {
+func (p *pluginConfig) validate() error {
 	if p.Name == "" {
 		return fmt.Errorf("missing name")
 	}
