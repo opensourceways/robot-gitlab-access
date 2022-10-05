@@ -74,8 +74,8 @@ func main() {
 	// Return 200 on / for health checks.
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
 
-	// For /hook, handle a webhook normally.
-	http.Handle("/gitlab-hook", d)
+	// For /gitlab-access, handle a hook message normally.
+	http.Handle("/gitlab-access", d)
 
 	httpServer := &http.Server{Addr: ":" + strconv.Itoa(o.plugin.Port)}
 
