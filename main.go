@@ -15,8 +15,9 @@ import (
 )
 
 type options struct {
-	plugin    liboptions.ServiceOptions
-	userAgent string
+	plugin      liboptions.ServiceOptions
+	userAgent   string
+	enableDebug bool
 }
 
 func (o *options) Validate() error {
@@ -33,6 +34,11 @@ func gatherOptions(fs *flag.FlagSet, args ...string) options {
 		"the value for header of User-Agent sent in the event request.",
 	)
 
+	fs.BoolVar(
+		&o.enableDebug, "enable_debug", false,
+		"whether to enable debug model.",
+	)
+
 	fs.Parse(args)
 	return o
 }
@@ -45,6 +51,11 @@ func main() {
 	o := gatherOptions(flag.NewFlagSet(os.Args[0], flag.ExitOnError), os.Args[1:]...)
 	if err := o.Validate(); err != nil {
 		logrus.WithError(err).Fatal("Invalid options")
+	}
+
+	if o.enableDebug {
+		logrus.SetLevel(logrus.DebugLevel)
+		logrus.Debug("debug enabled.")
 	}
 
 	// load config
