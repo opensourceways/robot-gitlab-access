@@ -236,6 +236,10 @@ func (d *dispatcher) doDispatch(endpoints []string, payload []byte, h http.Heade
 					"Error forwarding event to endpoint:%s, err:%s",
 					e, err.Error(),
 				)
+			} else {
+				l.Debugf(
+					"Forwarding event to endpoint:%s successfully", e,
+				)
 			}
 		}(endpoint, req)
 	}
